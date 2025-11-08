@@ -171,3 +171,32 @@ app.listen(PORT, () => {
   console.log(`   R2: ${s3 ? 'YES ✅' : 'NO ❌'}`);
   console.log(`   Using: Native FFmpeg CLI (no fluent-ffmpeg)\n`);
 });
+
+// ... keep existing code ...
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('===========================================');
+  console.log(`🚀 FFmpeg CLI Service v3.0 - SIMPLIFIED`);
+  console.log(`   Port: ${PORT}`);
+  console.log(`   Host: 0.0.0.0`);
+  console.log(`   Status: LISTENING ✅`);
+  console.log('===========================================');
+
+  // 🚨 NETWORK CONNECTIVITY TEST 🚨
+  console.log('\n[DIAGNOSTIC] Testing outbound internet connectivity...');
+  fetch('https://www.google.com', { signal: AbortSignal.timeout(5000) }) // Try to fetch Google within 5 seconds
+    .then(response => {
+      if (response.ok) {
+        console.log('[DIAGNOSTIC] ✅ Successfully connected to Google.com!');
+      } else {
+        console.error(`[DIAGNOSTIC] ❌ Failed to fetch Google.com (Status: ${response.status})`);
+      }
+    })
+    .catch(error => {
+      console.error(`[DIAGNOSTIC] ❌ Error connecting to Google.com: ${error.message}`);
+      console.error('[DIAGNOSTIC] This indicates a potential outbound network access issue in Railway.');
+      console.error('[DIAGNOSTIC] Please check your Railway project\'s network/firewall settings.');
+    });
+});
+
+// ... keep existing code ...
