@@ -1,0 +1,7 @@
+providers = ["node"]
+
+[phases.setup]
+aptPkgs = ["ffmpeg"]
+
+[start]
+cmd = "node server.js"
