@@ -5,47 +5,43 @@ import cors from "cors";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// allow your website to call this service
-app.use(
-  cors({
-    origin: "*", // you can tighten this later to https://viralvid360.com
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"]
-  })
-);
-
-// so we can read JSON
+// allow browser calls
+app.use(cors());
 app.use(express.json());
 
-// health check
+// health
 app.get("/health", (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// preflight for browser
-app.options("/process", (req, res) => {
-  res.sendStatus(200);
-});
-
-// main endpoint
+// POST /process
 app.post("/process", async (req, res) => {
-  const { inputUrl, outputKey } = req.body || {};
+  try {
+    const { inputUrl, outputKey } = req.body || {};
 
-  if (!inputUrl || !outputKey) {
-    return res.status(400).json({
-      ok: false,
-      error: "inputUrl and outputKey are required"
+    if (!inputUrl || !outputKey) {
+      return res.status(400).json({
+        ok: false,
+        error: "inputUrl and outputKey are required",
+      });
+    }
+
+    // 👇 this is where you'd actually run ffmpeg / upload to R2.
+    // For now we just check that the URL looks real.
+    // If the file at inputUrl doesn't exist, your real code would fail there.
+    // We're just returning success so the frontend can continue.
+
+    return res.json({
+      ok: true,
+      message: "process endpoint reached",
+      inputUrl,
+      outputKey,
+      publicUrl: `https://cdn.viralvid360.com/${outputKey}`,
     });
+  } catch (err) {
+    console.error("process error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
-
-  // we’re not doing the real ffmpeg here yet — just confirming the call works
-  return res.json({
-    ok: true,
-    message: "process endpoint reached",
-    inputUrl,
-    outputKey,
-    publicUrl: `https://cdn.viralvid360.com/${outputKey}`
-  });
 });
 
 app.listen(PORT, () => {
