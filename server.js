@@ -1,5 +1,5 @@
 // ============================================
-// RAILWAY FFMPEG SERVICE - v4.1 FINAL (with Diagnostics)
+// RAILWAY FFMPEG SERVICE - v4.2 FINAL (R2 Troubleshooting)
 // Copy this ENTIRE file to your Railway server.js
 // ============================================
 
@@ -11,6 +11,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import tmp from "tmp";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import axios from "axios"; // NEW: Add axios for R2 direct upload test
 
 const execAsync = promisify(exec);
 
@@ -23,14 +24,12 @@ const R2_BUCKET = process.env.R2_BUCKET;
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-// This handles the TLS warning you saw and the R2 upload failure.
-// IMPORTANT: Ensure NODE_TLS_REJECT_UNAUTHORIZED=0 is set in Railway Variables
 const NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Initialize S3 Client
+// Initialize S3 Client (aws-sdk)
 let s3 = null;
 if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
   try {
@@ -41,16 +40,15 @@ if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
         accessKeyId: R2_ACCESS_KEY_ID,
         secretAccessKey: R2_SECRET_ACCESS_KEY,
       },
-      // Explicitly configure TLS to ignore unauthorized certificates if the env var is set
       tls: { rejectUnauthorized: NODE_TLS_REJECT_UNAUTHORIZED !== '0' } 
     });
-    console.log('[R2] ✅ Client configured successfully');
+    console.log('[R2-SDK] ✅ Client configured successfully');
   } catch (error) {
-    console.error('[R2] ❌ Failed to initialize S3 client:', error.message);
+    console.error('[R2-SDK] ❌ Failed to initialize S3 client:', error.message);
   }
 } else {
-  console.error('[R2] ❌ CRITICAL: Missing R2 credentials. Uploads will fail!');
-  console.error('[R2] Required env vars: R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY');
+  console.error('[R2-SDK] ❌ CRITICAL: Missing R2 credentials. Uploads will fail!');
+  console.error('[R2-SDK] Required env vars: R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY');
 }
 
 // FFmpeg check
@@ -81,7 +79,7 @@ app.get("/health", async (req, res) => {
   res.json({
     ok: true,
     service: "ffmpeg-cli-processor",
-    version: "4.1-final",
+    version: "4.2-final",
     timestamp: new Date().toISOString(),
     config: {
       r2Configured: !!s3,
@@ -279,7 +277,7 @@ app.post("/process", async (req, res) => {
   }
 });
 
-// === DIAGNOSTIC ENDPOINT - Checks core components ===
+// === DIAGNOSTIC ENDPOINT - Checks core components + R2 Upload Test ===
 app.get("/diagnostic", async (req, res) => {
   const diagnostics = {
     timestamp: new Date().toISOString(),
@@ -350,6 +348,41 @@ app.get("/diagnostic", async (req, res) => {
     });
   }
 
+  // Check 5: R2 Upload Test (using aws-sdk)
+  if (s3 && R2_BUCKET) {
+    const testKey = `diagnostics/test-upload-${Date.now()}.txt`;
+    const testContent = "This is a diagnostic test file.";
+    try {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: testKey,
+          Body: testContent,
+          ContentType: "text/plain",
+        })
+      );
+      diagnostics.checks.push({
+        name: "R2 Upload Test (aws-sdk)",
+        status: "✅ OK",
+        testKey: testKey
+      });
+    } catch (error) {
+      diagnostics.checks.push({
+        name: "R2 Upload Test (aws-sdk)",
+        status: "❌ FAIL",
+        error: error.message,
+        details: error.stack
+      });
+    }
+  } else {
+    diagnostics.checks.push({
+      name: "R2 Upload Test (aws-sdk)",
+      status: "SKIPPED",
+      reason: "R2 not configured"
+    });
+  }
+
+
   const allOk = diagnostics.checks.every(c => c.status.includes("✅"));
   diagnostics.overallStatus = allOk ? "✅ ALL SYSTEMS GO" : "⚠️ ISSUES DETECTED";
 
@@ -360,9 +393,9 @@ app.get("/diagnostic", async (req, res) => {
 // Start server
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('\n======================================================');
-  console.log(`🚀 FFmpeg Service v4.1 - FINAL`);
+  console.log(`🚀 FFmpeg Service v4.2 - FINAL (R2 Troubleshooting)`);
   console.log(`   Port: ${PORT}`);
-  console.log(`   R2: ${s3 ? 'YES ✅' : 'NO ❌'}`);
+  console.log(`   R2 (aws-sdk): ${s3 ? 'YES ✅' : 'NO ❌'}`);
   console.log(`   NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED}`);
   console.log('======================================================\n');
 
