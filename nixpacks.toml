@@ -1,7 +1,22 @@
+# nixpacks.toml - BULLETPROOF Node.js Build
+# This configuration ensures all dependencies are correctly installed for Node.js and FFmpeg.
+
+# Use the Node.js provider
 providers = ["node"]
 
+# Specify Node.js version to ensure consistent environment
+# It's best to align this with your local development environment or Railway's recommended version
+environment_variables = { NODE_VERSION = "18" }
+
 [phases.setup]
-aptPkgs = ["ffmpeg"]
+# Install FFmpeg and its required libraries from apt packages
+aptPkgs = ["ffmpeg", "libavcodec-extra"]
+
+[phases.build]
+# Explicitly run npm install to ensure all Node.js dependencies are fetched
+# This should happen after apt packages are installed
+cmd = "npm install"
 
 [start]
+# Command to start the application
 cmd = "node server.js"
