@@ -1,14 +1,12 @@
 {
-  "name": "viralvid360-ffmpeg-service",
+  "name": "viralvid360-ffmpeg-service-v2",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  },
   "scripts": {
     "start": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.19.2",
-    "cors": "^2.8.5",
-    "@aws-sdk/client-s3": "^3.645.0"
   }
 }
