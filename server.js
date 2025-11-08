@@ -32,7 +32,9 @@ if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
       secretAccessKey: R2_SECRET_ACCESS_KEY,
     },
   });
-  console.log('[R2] Client configured');
+  console.log('[R2] ✅ Client configured');
+} else {
+  console.error('[R2] ❌ Missing credentials!');
 }
 
 app.get("/health", (req, res) => {
@@ -46,9 +48,14 @@ app.get("/health", (req, res) => {
 });
 
 async function downloadToBuffer(url) {
+  console.log('[Download] Starting...');
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  console.log(`[Download] ✅ ${buffer.length} bytes`);
+  return buffer;
 }
 
 function processVideo(inputPath, outputPath, style = 'cinematic') {
@@ -66,19 +73,29 @@ function processVideo(inputPath, outputPath, style = 'cinematic') {
       .preset("ultrafast")
       .videoFilters(filters[style] || 'scale=1920:1080')
       .audioCodec("copy")
-      .on("end", resolve)
-      .on("error", reject)
+      .on("end", () => {
+        console.log('[FFmpeg] ✅ Complete');
+        resolve();
+      })
+      .on("error", (err) => {
+        console.error('[FFmpeg] ❌ Error:', err.message);
+        reject(err);
+      })
       .run();
   });
 }
 
 app.post("/process", async (req, res) => {
   const { inputUrl, outputKey, style = 'cinematic' } = req.body || {};
-  const rid = Date.now().toString(36);
+  const requestId = Date.now().toString(36);
+
+  console.log(`\n[${requestId}] ========== NEW REQUEST ==========`);
+  console.log(`[${requestId}] Output: ${outputKey}`);
 
   if (!inputUrl || !outputKey) {
-    return res.status(400).json({ success: false, error: "Missing required fields" });
+    return res.status(400).json({ success: false, error: "Missing inputUrl or outputKey" });
   }
+
   if (!s3) {
     return res.status(500).json({ success: false, error: "R2 not configured" });
   }
@@ -90,55 +107,76 @@ app.post("/process", async (req, res) => {
     tmpIn = tmp.fileSync({ postfix: ".mp4" });
     tmpOut = tmp.fileSync({ postfix: ".mp4" });
 
-    console.log(`[${rid}] Downloading...`);
+    // 1. Download
+    console.log(`[${requestId}] Downloading...`);
     const inputBuffer = await downloadToBuffer(inputUrl);
     await fs.writeFile(tmpIn.name, inputBuffer);
 
+    // 2. Process
     if (ENABLE_FFMPEG) {
-      console.log(`[${rid}] Processing...`);
+      console.log(`[${requestId}] Processing with FFmpeg (${style})...`);
       await processVideo(tmpIn.name, tmpOut.name, style);
     } else {
+      console.log(`[${requestId}] Copying (FFmpeg disabled)...`);
       await fs.copyFile(tmpIn.name, tmpOut.name);
     }
 
-    console.log(`[${rid}] Reading output...`);
+    // 3. Read output into buffer ✅ KEY FIX
+    console.log(`[${requestId}] Reading output...`);
     const outputBuffer = await fs.readFile(tmpOut.name);
-    console.log(`[${rid}] Output: ${outputBuffer.length} bytes`);
+    console.log(`[${requestId}] Output: ${outputBuffer.length} bytes`);
 
-    console.log(`[${rid}] Uploading to R2...`);
+    // 4. Upload to R2 with BUFFER ✅ KEY FIX
+    console.log(`[${requestId}] Uploading to R2...`);
     await s3.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: outputKey,
-        Body: outputBuffer,
+        Body: outputBuffer, // ✅ BUFFER NOT STREAM
         ContentType: "video/mp4",
         CacheControl: "public, max-age=31536000",
       })
     );
 
     const cdnUrl = `${R2_PUBLIC_BASE_URL}/${outputKey}`;
-    console.log(`[${rid}] SUCCESS: ${cdnUrl}`);
+    console.log(`[${requestId}] ✅ SUCCESS! ${cdnUrl}`);
 
-    res.json({ success: true, cdnUrl, outputKey, requestId: rid });
+    // 5. Send response FIRST
+    res.json({
+      success: true,
+      cdnUrl,
+      outputKey,
+      requestId
+    });
 
+    // 6. Cleanup AFTER ✅ KEY FIX
     setImmediate(() => {
       try {
         tmpIn.removeCallback();
         tmpOut.removeCallback();
+        console.log(`[${requestId}] 🧹 Cleanup done`);
       } catch {}
     });
 
   } catch (error) {
-    console.error(`[${rid}] ERROR:`, error.message);
+    console.error(`[${requestId}] ❌ ERROR:`, error.message);
+    
     try {
       if (tmpIn) tmpIn.removeCallback();
       if (tmpOut) tmpOut.removeCallback();
     } catch {}
-    return res.status(500).json({ success: false, error: error.message, requestId: rid });
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      requestId
+    });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 FFmpeg BULLETPROOF v2.0 on port ${PORT}`);
-  console.log(`   R2: ${s3 ? 'OK' : 'NOT CONFIGURED'}`);
+  console.log(`\n🚀 FFmpeg Service BULLETPROOF v2.0`);
+  console.log(`   Port: ${PORT}`);
+  console.log(`   R2: ${s3 ? 'YES ✅' : 'NO ❌'}`);
+  console.log(`   Bucket: ${R2_BUCKET || 'NOT SET'}\n`);
 });
