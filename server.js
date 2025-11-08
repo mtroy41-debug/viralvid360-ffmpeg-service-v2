@@ -1,4 +1,3 @@
-// server.js - Make sure this is the same as the "BULLETPROOF v2.0" version I sent previously.
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -42,7 +41,7 @@ app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "ffmpeg-processor",
-    version: "2.0-bulletproof",
+    version: "2.0-bulletproof-docker",
     timestamp: new Date().toISOString(),
     r2Configured: !!s3
   });
@@ -108,12 +107,10 @@ app.post("/process", async (req, res) => {
     tmpIn = tmp.fileSync({ postfix: ".mp4" });
     tmpOut = tmp.fileSync({ postfix: ".mp4" });
 
-    // 1. Download
     console.log(`[${requestId}] Downloading...`);
     const inputBuffer = await downloadToBuffer(inputUrl);
     await fs.writeFile(tmpIn.name, inputBuffer);
 
-    // 2. Process
     if (ENABLE_FFMPEG) {
       console.log(`[${requestId}] Processing with FFmpeg (${style})...`);
       await processVideo(tmpIn.name, tmpOut.name, style);
@@ -122,18 +119,16 @@ app.post("/process", async (req, res) => {
       await fs.copyFile(tmpIn.name, tmpOut.name);
     }
 
-    // 3. Read output into buffer ✅ KEY FIX
     console.log(`[${requestId}] Reading output...`);
     const outputBuffer = await fs.readFile(tmpOut.name);
     console.log(`[${requestId}] Output: ${outputBuffer.length} bytes`);
 
-    // 4. Upload to R2 with BUFFER ✅ KEY FIX
     console.log(`[${requestId}] Uploading to R2...`);
     await s3.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: outputKey,
-        Body: outputBuffer, // ✅ BUFFER NOT STREAM
+        Body: outputBuffer,
         ContentType: "video/mp4",
         CacheControl: "public, max-age=31536000",
       })
@@ -142,7 +137,6 @@ app.post("/process", async (req, res) => {
     const cdnUrl = `${R2_PUBLIC_BASE_URL}/${outputKey}`;
     console.log(`[${requestId}] ✅ SUCCESS! ${cdnUrl}`);
 
-    // 5. Send response FIRST
     res.json({
       success: true,
       cdnUrl,
@@ -150,7 +144,6 @@ app.post("/process", async (req, res) => {
       requestId
     });
 
-    // 6. Cleanup AFTER ✅ KEY FIX
     setImmediate(() => {
       try {
         tmpIn.removeCallback();
@@ -176,7 +169,7 @@ app.post("/process", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 FFmpeg Service BULLETPROOF v2.0`);
+  console.log(`\n🚀 FFmpeg Service BULLETPROOF v2.0 (Docker)`);
   console.log(`   Port: ${PORT}`);
   console.log(`   R2: ${s3 ? 'YES ✅' : 'NO ❌'}`);
   console.log(`   Bucket: ${R2_BUCKET || 'NOT SET'}\n`);
