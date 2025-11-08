@@ -7,17 +7,17 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// --- envs we need ---
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;         // e.g. "123456789abcdef"
+// use the envs you already have
+const R2_ENDPOINT = process.env.R2_ENDPOINT;               // you have this
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_BUCKET = process.env.R2_BUCKET;                 // e.g. "viralvid360"
-const CDN_BASE = process.env.CDN_BASE || "https://cdn.viralvid360.com";
+const R2_BUCKET = process.env.R2_BUCKET;                   // "viralvid360"
+const CDN_BASE =
+  process.env.R2_PUBLIC_BASE_URL || "https://cdn.viralvid360.com";
 
-// S3 client for Cloudflare R2
 const s3 = new S3Client({
   region: "auto",
-  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  endpoint: R2_ENDPOINT,
   credentials: {
     accessKeyId: R2_ACCESS_KEY_ID,
     secretAccessKey: R2_SECRET_ACCESS_KEY,
@@ -32,7 +32,7 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// real process
+// main endpoint your Deno function calls
 app.post("/process", async (req, res) => {
   try {
     const { inputUrl, outputKey } = req.body || {};
@@ -44,7 +44,7 @@ app.post("/process", async (req, res) => {
       });
     }
 
-    // 1) download source video
+    // 1. download source
     const resp = await fetch(inputUrl);
     if (!resp.ok) {
       return res.status(500).json({
@@ -54,17 +54,17 @@ app.post("/process", async (req, res) => {
     }
     const fileBuffer = Buffer.from(await resp.arrayBuffer());
 
-    // 2) upload to R2 at exactly the key your frontend expects
+    // 2. upload to R2 at the exact key your frontend expects
     await s3.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
-        Key: outputKey, // e.g. "processed/17625296521279-cinematic.mp4"
+        Key: outputKey,
         Body: fileBuffer,
         ContentType: "video/mp4",
       })
     );
 
-    // 3) respond with same shape you already wired in Base44
+    // 3. answer in the format your Base44 function is already expecting
     return res.json({
       ok: true,
       message: "process endpoint reached",
