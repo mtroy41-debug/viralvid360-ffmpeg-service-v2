@@ -1,3 +1,4 @@
+import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
 import { promises as fs } from "fs";
@@ -57,7 +58,6 @@ async function downloadToBuffer(url) {
 async function processVideoCLI(inputPath, outputPath, style = 'cinematic') {
   console.log(`[FFmpeg-CLI] Processing with style: ${style}`);
   
-  // Style filters mapped to FFmpeg CLI syntax
   const filters = {
     cinematic: 'eq=contrast=1.2:brightness=0.1:saturation=1.1',
     vibrant: 'eq=contrast=1.3:saturation=1.5',
@@ -67,16 +67,13 @@ async function processVideoCLI(inputPath, outputPath, style = 'cinematic') {
   };
   
   const filter = filters[style] || filters.default;
-  
-  // Use FFmpeg CLI directly - NO fluent-ffmpeg library!
   const ffmpegCmd = `ffmpeg -i "${inputPath}" -vf "${filter}" -c:v libx264 -preset ultrafast -c:a copy "${outputPath}"`;
   
-  console.log(`[FFmpeg-CLI] Command: ${ffmpegCmd.substring(0, 100)}...`);
+  console.log(`[FFmpeg-CLI] Running command...`);
   
   try {
     const { stdout, stderr } = await execAsync(ffmpegCmd, { maxBuffer: 10 * 1024 * 1024 });
     console.log('[FFmpeg-CLI] ✅ Complete');
-    if (stderr) console.log('[FFmpeg-CLI] Stderr:', stderr.substring(0, 200));
     return { success: true };
   } catch (error) {
     console.error('[FFmpeg-CLI] ❌ Error:', error.message);
@@ -109,25 +106,20 @@ app.post("/process", async (req, res) => {
   let tmpOut = null;
 
   try {
-    // Create temp files
     tmpIn = tmp.fileSync({ postfix: ".mp4" });
     tmpOut = tmp.fileSync({ postfix: ".mp4" });
 
-    // Download
     console.log(`[${requestId}] Downloading...`);
     const inputBuffer = await downloadToBuffer(inputUrl);
     await fs.writeFile(tmpIn.name, inputBuffer);
 
-    // Process with FFmpeg CLI
     console.log(`[${requestId}] Processing...`);
     await processVideoCLI(tmpIn.name, tmpOut.name, style);
 
-    // Read output
     console.log(`[${requestId}] Reading output...`);
     const outputBuffer = await fs.readFile(tmpOut.name);
     console.log(`[${requestId}] Output: ${outputBuffer.length} bytes`);
 
-    // Upload to R2
     console.log(`[${requestId}] Uploading...`);
     await s3.send(
       new PutObjectCommand({
@@ -142,7 +134,6 @@ app.post("/process", async (req, res) => {
     const cdnUrl = `${R2_PUBLIC_BASE_URL}/${outputKey}`;
     console.log(`[${requestId}] ✅ SUCCESS: ${cdnUrl}`);
 
-    // Send response
     res.json({
       success: true,
       cdnUrl,
@@ -150,7 +141,6 @@ app.post("/process", async (req, res) => {
       requestId
     });
 
-    // Cleanup after response
     setImmediate(() => {
       try {
         tmpIn.removeCallback();
@@ -162,7 +152,6 @@ app.post("/process", async (req, res) => {
   } catch (error) {
     console.error(`[${requestId}] ❌ ERROR:`, error.message);
     
-    // Cleanup on error
     try {
       if (tmpIn) tmpIn.removeCallback();
       if (tmpOut) tmpOut.removeCallback();
