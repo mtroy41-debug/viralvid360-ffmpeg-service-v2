@@ -33,8 +33,6 @@ if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
     },
   });
   console.log('[R2] Client configured');
-} else {
-  console.error('[R2] Missing credentials!');
 }
 
 app.get("/health", (req, res) => {
@@ -49,9 +47,7 @@ app.get("/health", (req, res) => {
 
 async function downloadToBuffer(url) {
   const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Download failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
 }
 
@@ -78,14 +74,11 @@ function processVideo(inputPath, outputPath, style = 'cinematic') {
 
 app.post("/process", async (req, res) => {
   const { inputUrl, outputKey, style = 'cinematic' } = req.body || {};
-  const requestId = Date.now().toString(36);
-
-  console.log(`[${requestId}] Starting - ${outputKey}`);
+  const rid = Date.now().toString(36);
 
   if (!inputUrl || !outputKey) {
-    return res.status(400).json({ success: false, error: "Missing inputUrl or outputKey" });
+    return res.status(400).json({ success: false, error: "Missing required fields" });
   }
-
   if (!s3) {
     return res.status(500).json({ success: false, error: "R2 not configured" });
   }
@@ -97,78 +90,55 @@ app.post("/process", async (req, res) => {
     tmpIn = tmp.fileSync({ postfix: ".mp4" });
     tmpOut = tmp.fileSync({ postfix: ".mp4" });
 
-    // Download
-    console.log(`[${requestId}] Downloading...`);
+    console.log(`[${rid}] Downloading...`);
     const inputBuffer = await downloadToBuffer(inputUrl);
     await fs.writeFile(tmpIn.name, inputBuffer);
 
-    // Process
     if (ENABLE_FFMPEG) {
-      console.log(`[${requestId}] Processing with FFmpeg...`);
+      console.log(`[${rid}] Processing...`);
       await processVideo(tmpIn.name, tmpOut.name, style);
     } else {
       await fs.copyFile(tmpIn.name, tmpOut.name);
     }
 
-    // Read output into buffer ✅ KEY FIX
-    console.log(`[${requestId}] Reading output...`);
+    console.log(`[${rid}] Reading output...`);
     const outputBuffer = await fs.readFile(tmpOut.name);
-    console.log(`[${requestId}] Output size: ${outputBuffer.length} bytes`);
+    console.log(`[${rid}] Output: ${outputBuffer.length} bytes`);
 
-    // Upload to R2 ✅ Using buffer, not stream
-    console.log(`[${requestId}] Uploading to R2...`);
+    console.log(`[${rid}] Uploading to R2...`);
     await s3.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: outputKey,
-        Body: outputBuffer, // ✅ BUFFER, NOT STREAM
+        Body: outputBuffer,
         ContentType: "video/mp4",
         CacheControl: "public, max-age=31536000",
       })
     );
 
     const cdnUrl = `${R2_PUBLIC_BASE_URL}/${outputKey}`;
-    console.log(`[${requestId}] SUCCESS! ${cdnUrl}`);
+    console.log(`[${rid}] SUCCESS: ${cdnUrl}`);
 
-    // Send response FIRST
-    res.json({
-      success: true,
-      cdnUrl,
-      outputKey,
-      requestId
-    });
+    res.json({ success: true, cdnUrl, outputKey, requestId: rid });
 
-    // Cleanup AFTER response ✅ KEY FIX
     setImmediate(() => {
       try {
         tmpIn.removeCallback();
         tmpOut.removeCallback();
-        console.log(`[${requestId}] Cleanup done`);
-      } catch (err) {
-        console.warn(`[${requestId}] Cleanup warning:`, err.message);
-      }
+      } catch {}
     });
 
   } catch (error) {
-    console.error(`[${requestId}] ERROR:`, error.message);
-    
-    // Cleanup on error
+    console.error(`[${rid}] ERROR:`, error.message);
     try {
       if (tmpIn) tmpIn.removeCallback();
       if (tmpOut) tmpOut.removeCallback();
     } catch {}
-
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      requestId
-    });
+    return res.status(500).json({ success: false, error: error.message, requestId: rid });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 FFmpeg Service BULLETPROOF v2.0`);
-  console.log(`   Port: ${PORT}`);
-  console.log(`   R2: ${s3 ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
-  console.log(`   Bucket: ${R2_BUCKET || 'NOT SET'}\n`);
+  console.log(`🚀 FFmpeg BULLETPROOF v2.0 on port ${PORT}`);
+  console.log(`   R2: ${s3 ? 'OK' : 'NOT CONFIGURED'}`);
 });
