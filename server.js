@@ -1,13 +1,11 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import fs from "fs/promises"; // ✅ Use promises version
+import { promises as fs } from "fs";
 import tmp from "tmp";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { Readable } from "stream";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -20,10 +18,9 @@ const R2_BUCKET = process.env.R2_BUCKET;
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const SERVICE_KEY = process.env.SERVICE_KEY || "ffmpeg-test-123";
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 let s3 = null;
 if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
@@ -37,160 +34,141 @@ if (R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
   });
   console.log('[R2] Client configured');
 } else {
-  console.warn('[R2] Missing credentials - uploads will fail');
+  console.error('[R2] Missing credentials!');
 }
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "ffmpeg-processor",
-    ts: new Date().toISOString(),
-    port: PORT,
-    r2Configured: !!s3,
+    version: "2.0-bulletproof",
+    timestamp: new Date().toISOString(),
+    r2Configured: !!s3
   });
 });
 
-// Helper to download file
 async function downloadToBuffer(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Download failed: ${response.status}`);
   }
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return Buffer.from(await response.arrayBuffer());
 }
 
-// Helper to run FFmpeg
-function processVideo(inputPath, outputPath) {
+function processVideo(inputPath, outputPath, style = 'cinematic') {
   return new Promise((resolve, reject) => {
+    const filters = {
+      cinematic: 'eq=contrast=1.2:brightness=0.1:saturation=1.1',
+      vibrant: 'eq=contrast=1.3:saturation=1.5',
+      vintage: 'curves=vintage,vignette',
+      bw: 'hue=s=0'
+    };
+    
     ffmpeg(inputPath)
       .output(outputPath)
       .videoCodec("libx264")
-      .preset("ultrafast") // Faster processing
-      .size("?x720")
-      .on("end", () => {
-        console.log('[FFmpeg] Processing complete');
-        resolve();
-      })
-      .on("error", (err) => {
-        console.error('[FFmpeg] Error:', err.message);
-        reject(err);
-      })
+      .preset("ultrafast")
+      .videoFilters(filters[style] || 'scale=1920:1080')
+      .audioCodec("copy")
+      .on("end", resolve)
+      .on("error", reject)
       .run();
   });
 }
 
 app.post("/process", async (req, res) => {
-  const { inputUrl, outputKey, style, intensity } = req.body || {};
+  const { inputUrl, outputKey, style = 'cinematic' } = req.body || {};
   const requestId = Date.now().toString(36);
 
-  console.log(`[${requestId}] Processing request:`, {
-    inputUrl: inputUrl?.substring(0, 50) + '...',
-    outputKey,
-    style,
-    intensity
-  });
+  console.log(`[${requestId}] Starting - ${outputKey}`);
 
   if (!inputUrl || !outputKey) {
-    return res.status(400).json({
-      ok: false,
-      error: "inputUrl and outputKey are required",
-    });
+    return res.status(400).json({ success: false, error: "Missing inputUrl or outputKey" });
   }
 
   if (!s3) {
-    return res.status(500).json({
-      ok: false,
-      error: "R2 storage not configured",
-    });
+    return res.status(500).json({ success: false, error: "R2 not configured" });
   }
 
-  // Create temp files
-  const tmpIn = tmp.fileSync({ postfix: ".mp4" });
-  const tmpOut = tmp.fileSync({ postfix: ".mp4" });
+  let tmpIn = null;
+  let tmpOut = null;
 
   try {
-    // 1) Download input video to buffer first
-    console.log(`[${requestId}] Downloading input...`);
+    tmpIn = tmp.fileSync({ postfix: ".mp4" });
+    tmpOut = tmp.fileSync({ postfix: ".mp4" });
+
+    // Download
+    console.log(`[${requestId}] Downloading...`);
     const inputBuffer = await downloadToBuffer(inputUrl);
     await fs.writeFile(tmpIn.name, inputBuffer);
-    console.log(`[${requestId}] Downloaded ${inputBuffer.length} bytes`);
 
-    // 2) Process with FFmpeg (or just copy)
+    // Process
     if (ENABLE_FFMPEG) {
       console.log(`[${requestId}] Processing with FFmpeg...`);
-      await processVideo(tmpIn.name, tmpOut.name);
+      await processVideo(tmpIn.name, tmpOut.name, style);
     } else {
-      console.log(`[${requestId}] Copying (FFmpeg disabled)...`);
       await fs.copyFile(tmpIn.name, tmpOut.name);
     }
 
-    // 3) Read output file into buffer
-    console.log(`[${requestId}] Reading output file...`);
+    // Read output into buffer ✅ KEY FIX
+    console.log(`[${requestId}] Reading output...`);
     const outputBuffer = await fs.readFile(tmpOut.name);
     console.log(`[${requestId}] Output size: ${outputBuffer.length} bytes`);
 
-    // 4) Upload to R2 with buffer (not stream!)
+    // Upload to R2 ✅ Using buffer, not stream
     console.log(`[${requestId}] Uploading to R2...`);
     await s3.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: outputKey,
-        Body: outputBuffer, // ✅ Use buffer, not stream!
+        Body: outputBuffer, // ✅ BUFFER, NOT STREAM
         ContentType: "video/mp4",
         CacheControl: "public, max-age=31536000",
       })
     );
-    console.log(`[${requestId}] Upload complete`);
 
-    // 5) Generate CDN URL
     const cdnUrl = `${R2_PUBLIC_BASE_URL}/${outputKey}`;
-    console.log(`[${requestId}] Success! CDN URL: ${cdnUrl}`);
+    console.log(`[${requestId}] SUCCESS! ${cdnUrl}`);
 
-    // 6) Return response (BEFORE cleanup)
-    const response = {
-      ok: true,
+    // Send response FIRST
+    res.json({
       success: true,
-      message: "Processing complete",
-      inputUrl,
+      cdnUrl,
       outputKey,
-      cdnUrl, // ✅ Match what Base44 expects
-      requestId,
-    };
+      requestId
+    });
 
-    res.json(response);
-
-    // 7) Cleanup AFTER response sent
+    // Cleanup AFTER response ✅ KEY FIX
     setImmediate(() => {
       try {
         tmpIn.removeCallback();
         tmpOut.removeCallback();
-        console.log(`[${requestId}] Cleanup complete`);
-      } catch (cleanupErr) {
-        console.warn(`[${requestId}] Cleanup error:`, cleanupErr.message);
+        console.log(`[${requestId}] Cleanup done`);
+      } catch (err) {
+        console.warn(`[${requestId}] Cleanup warning:`, err.message);
       }
     });
 
-  } catch (err) {
-    console.error(`[${requestId}] Error:`, err);
+  } catch (error) {
+    console.error(`[${requestId}] ERROR:`, error.message);
     
     // Cleanup on error
     try {
-      tmpIn.removeCallback();
-      tmpOut.removeCallback();
+      if (tmpIn) tmpIn.removeCallback();
+      if (tmpOut) tmpOut.removeCallback();
     } catch {}
 
     return res.status(500).json({
-      ok: false,
       success: false,
-      error: err.message,
-      requestId,
+      error: error.message,
+      requestId
     });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 FFmpeg service listening on port ${PORT}`);
-  console.log(`   R2 Configured: ${!!s3}`);
-  console.log(`   FFmpeg Enabled: ${ENABLE_FFMPEG}`);
+  console.log(`\n🚀 FFmpeg Service BULLETPROOF v2.0`);
+  console.log(`   Port: ${PORT}`);
+  console.log(`   R2: ${s3 ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
+  console.log(`   Bucket: ${R2_BUCKET || 'NOT SET'}\n`);
 });
