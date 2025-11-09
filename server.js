@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import { spawn } from "child_process";
 import fs from "fs";
@@ -7,17 +6,17 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// --- envs from your Railway screenshot ---
-const SERVICE_KEY = process.env.SERVICE_KEY || ""; // e.g. "ffmpeg-test-123"
-const R2_ENDPOINT = process.env.R2_ENDPOINT;       // e.g. https://fe0e...r2.cloudflarestorage.com
-const R2_BUCKET = process.env.R2_BUCKET;           // e.g. viralvid360
-const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL; // e.g. https://cdn.viralvid360.com
+// Env vars
+const SERVICE_KEY = process.env.SERVICE_KEY || "";
+const R2_ENDPOINT = process.env.R2_ENDPOINT;
+const R2_BUCKET = process.env.R2_BUCKET;
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 
 app.use(express.json());
 
-// R2 client (Cloudflare R2 is S3-compatible)
+// Cloudflare R2 Client
 const r2 = new S3Client({
   region: "auto",
   endpoint: R2_ENDPOINT,
@@ -27,22 +26,19 @@ const r2 = new S3Client({
   },
 });
 
-// health
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
+    service: "ffmpeg-service",
     ts: new Date().toISOString(),
-    service: "ffmpeg-processor",
   });
 });
 
-// main process
 app.post("/process", async (req, res) => {
   try {
-    // optional shared secret
     const incomingKey = req.headers["x-service-key"];
     if (SERVICE_KEY && incomingKey !== SERVICE_KEY) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
     const { inputUrl, outputKey } = req.body || {};
@@ -52,18 +48,12 @@ app.post("/process", async (req, res) => {
         .json({ ok: false, error: "inputUrl and outputKey are required" });
     }
 
-    // 1) download to /tmp
     const inPath = `/tmp/in-${Date.now()}.mp4`;
     const outPath = `/tmp/out-${Date.now()}.mp4`;
 
+    // Step 1: Download input
     const resp = await fetch(inputUrl);
-    if (!resp.ok) {
-      return res.status(500).json({
-        ok: false,
-        error: `failed to download input: ${resp.status} ${resp.statusText}`,
-      });
-    }
-
+    if (!resp.ok) throw new Error(`Failed to fetch input: ${resp.status}`);
     await new Promise((resolve, reject) => {
       const file = fs.createWriteStream(inPath);
       resp.body.pipe(file);
@@ -71,7 +61,7 @@ app.post("/process", async (req, res) => {
       file.on("finish", resolve);
     });
 
-    // 2) run ffmpeg
+    // Step 2: Process video
     await new Promise((resolve, reject) => {
       const ff = spawn("ffmpeg", [
         "-y",
@@ -87,48 +77,41 @@ app.post("/process", async (req, res) => {
         "aac",
         outPath,
       ]);
-
       ff.stderr.on("data", (d) => console.log(d.toString()));
       ff.on("error", reject);
       ff.on("close", (code) => {
-        if (code === 0) return resolve();
-        return reject(new Error(`ffmpeg exited with code ${code}`));
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited with code ${code}`));
       });
     });
 
-    // 3) upload to R2
-    const fileBuffer = fs.readFileSync(outPath);
-
+    // Step 3: Upload to R2
+    const buffer = fs.readFileSync(outPath);
     await r2.send(
       new PutObjectCommand({
         Bucket: R2_BUCKET,
         Key: outputKey,
-        Body: fileBuffer,
+        Body: buffer,
         ContentType: "video/mp4",
       })
     );
 
-    // 4) cleanup
+    // Cleanup
     fs.unlink(inPath, () => {});
     fs.unlink(outPath, () => {});
 
-    // 5) public URL back to Remix Studio
-    const publicUrl =
-      R2_PUBLIC_BASE_URL.replace(/\/+$/, "") + "/" + outputKey.replace(/^\/+/, "");
+    const publicUrl = `${R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${outputKey}`;
 
     return res.json({
       ok: true,
-      message: "video processed",
-      inputUrl,
-      outputKey,
+      message: "Processing complete",
       publicUrl,
+      outputKey,
     });
   } catch (err) {
-    console.error("process error:", err);
+    console.error(err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`FFmpeg service listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`FFmpeg service running on ${PORT}`));
