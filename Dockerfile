@@ -1,27 +1,32 @@
 # Use official Node.js 18 image
 FROM node:18-slim
 
-# Install FFmpeg and dependencies
-# `libavcodec-extra` is important for full codec support
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    libavcodec-extra \
-    && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg and required codecs
+RUN apt-get update && \
+    apt-get install -y ffmpeg libavcodec-extra && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Create app directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first (better build cache)
 COPY package*.json ./
 
-# Install Node.js dependencies (only production dependencies)
+# Install dependencies (production mode)
 RUN npm install --production
 
-# Copy application code
+# Copy the rest of the application
 COPY . .
 
-# Expose port (as per Railway requirements)
+# Ensure /tmp is writable (for FFmpeg temp files)
+RUN mkdir -p /tmp && chmod -R 777 /tmp
+
+# Railway requires a listening port
 EXPOSE 8080
 
-# Start the application
+# Define environment vars defaults (optional)
+ENV NODE_ENV=production
+ENV PORT=8080
+
+# Start service
 CMD ["node", "server.js"]
