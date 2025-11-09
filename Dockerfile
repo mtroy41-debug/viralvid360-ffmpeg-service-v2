@@ -1,8 +1,8 @@
-FROM node:18-slim
+FROM node:20-slim
 
+# Install FFmpeg and required libraries
 RUN apt-get update && \
-    apt-get install -y ffmpeg libavcodec-extra && \
-    # REMOVED: apt-get install -y /usr/lib/x86_64-linux-gnu/libssl* \
+    apt-get install -y ffmpeg libavcodec-extra ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
