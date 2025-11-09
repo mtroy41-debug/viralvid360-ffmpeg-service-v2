@@ -1,6 +1,6 @@
 {
-  "name": "viralvid360-ffmpeg-cli",
-  "version": "4.2.0",
+  "name": "viralvid360-ffmpeg-presigned",
+  "version": "5.0.0",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -12,7 +12,7 @@
     "node-fetch": "^3.3.2",
     "tmp": "^0.2.1",
     "@aws-sdk/client-s3": "^3.450.0",
-    "axios": "^1.6.2"  <-- NEW LINE
+    "@aws-sdk/s3-request-presigner": "^3.450.0"
   },
   "engines": {
     "node": ">=18.0.0"
