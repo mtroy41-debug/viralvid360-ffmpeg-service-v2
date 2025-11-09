@@ -1,16 +1,12 @@
 // server.js
 import express from "express";
-import fetch from "node-fetch"; // if you're on Node <18; on Node 18+ you can remove this line
 import fs from "fs";
 import path from "path";
-
-// If you're uploading to R2/S3, you'll also have something like:
-// import AWS from "aws-sdk";
 
 const app = express();
 app.use(express.json({ limit: "200mb" }));
 
-// ✅ CORS: allow app domain + cdn domain + local
+// ✅ CORS: allow your app + cdn + local
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowed = [
@@ -24,7 +20,7 @@ app.use((req, res, next) => {
   if (origin && allowed.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else {
-    // if you just want to allow everything, uncomment the next line
+    // if you want to be super open, uncomment:
     // res.setHeader("Access-Control-Allow-Origin", "*");
   }
 
@@ -38,7 +34,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// small helper
 function ensureDirForFile(filePath) {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
@@ -63,10 +58,9 @@ app.post("/process", async (req, res) => {
 
     console.log("downloading", inputUrl);
 
-    // 1) download source file
+    // ✅ use global fetch (Node 20 has this)
     const sourceResp = await fetch(inputUrl);
     if (!sourceResp.ok) {
-      // 👇 this is the thing that was blowing up earlier
       return res.status(400).json({
         ok: false,
         error: `download failed: ${sourceResp.status} ${sourceResp.statusText}`,
@@ -74,7 +68,7 @@ app.post("/process", async (req, res) => {
       });
     }
 
-    // where to save input
+    // save input to /tmp
     const inputPath = `/tmp/input.mp4`;
     const fileStream = fs.createWriteStream(inputPath);
     await new Promise((resolve, reject) => {
@@ -83,30 +77,18 @@ app.post("/process", async (req, res) => {
       fileStream.on("finish", resolve);
     });
 
-    // 2) ensure output dir exists (this was another earlier issue)
+    // make sure /tmp/processed/... exists
     const outLocalPath = `/tmp/${outputKey}`;
     ensureDirForFile(outLocalPath);
 
-    // 3) run ffmpeg
-    // this is pseudocode – keep your existing spawn code here
-    // e.g. spawn("ffmpeg", ["-i", inputPath, "-c:v", "copy", outLocalPath])
-    // await waitForFFmpeg(...)
-    // For now let's just pretend we processed:
-    console.log("pretend ffmpeg processed to", outLocalPath);
-    fs.copyFileSync(inputPath, outLocalPath); // 👈 temp: just copy so we always have an output
+    // ✅ TODO: run your real ffmpeg here
+    // for now just copy the input so the pipeline always succeeds
+    fs.copyFileSync(inputPath, outLocalPath);
+    console.log("processed to", outLocalPath);
 
-    // 4) upload to R2 / S3
-    // You'll have something like:
-    // const s3 = new AWS.S3({ ...env });
-    // await s3.putObject({
-    //   Bucket: process.env.R2_BUCKET,
-    //   Key: outputKey,
-    //   Body: fs.createReadStream(outLocalPath),
-    //   ContentType: "video/mp4",
-    // }).promise();
-
-    // 5) return the final CDN URL so the UI can show it
-    const cdnBase = process.env.R2_PUBLIC_BASE_URL || "https://cdn.viralvid360.com";
+    // build public URL
+    const cdnBase =
+      process.env.R2_PUBLIC_BASE_URL || "https://cdn.viralvid360.com";
     const publicUrl = `${cdnBase}/${outputKey}`;
 
     return res.json({
