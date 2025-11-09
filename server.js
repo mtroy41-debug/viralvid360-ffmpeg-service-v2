@@ -1,50 +1,3 @@
-// server.js
-import express from "express";
-import fs from "fs";
-import path from "path";
-
-const app = express();
-app.use(express.json({ limit: "200mb" }));
-
-// ✅ CORS: allow your app + cdn + local
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowed = [
-    "https://viralvid360.com",
-    "https://www.viralvid360.com",
-    "https://cdn.viralvid360.com",
-    "http://localhost:3000",
-    "http://localhost:5173",
-  ];
-
-  if (origin && allowed.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    // if you want to be super open, uncomment:
-    // res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-service-key");
-  res.setHeader("Access-Control-Max-Age", "86400");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-  next();
-});
-
-function ensureDirForFile(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
-app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "viralvid360-ffmpeg-service-v2" });
-});
-
 app.post("/process", async (req, res) => {
   try {
     const { inputUrl, outputKey } = req.body;
@@ -58,7 +11,7 @@ app.post("/process", async (req, res) => {
 
     console.log("downloading", inputUrl);
 
-    // ✅ use global fetch (Node 20 has this)
+    // fetch the source
     const sourceResp = await fetch(inputUrl);
     if (!sourceResp.ok) {
       return res.status(400).json({
@@ -68,25 +21,18 @@ app.post("/process", async (req, res) => {
       });
     }
 
-    // save input to /tmp
-    const inputPath = `/tmp/input.mp4`;
-    const fileStream = fs.createWriteStream(inputPath);
-    await new Promise((resolve, reject) => {
-      sourceResp.body.pipe(fileStream);
-      sourceResp.body.on("error", reject);
-      fileStream.on("finish", resolve);
-    });
+    // ✅ Node 20 fetch → use arrayBuffer()
+    const arrayBuf = await sourceResp.arrayBuffer();
+    const inputPath = "/tmp/input.mp4";
+    fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
 
-    // make sure /tmp/processed/... exists
+    // make sure output path exists
     const outLocalPath = `/tmp/${outputKey}`;
     ensureDirForFile(outLocalPath);
 
-    // ✅ TODO: run your real ffmpeg here
-    // for now just copy the input so the pipeline always succeeds
+    // 👉 run ffmpeg here (for now we just copy so pipeline works)
     fs.copyFileSync(inputPath, outLocalPath);
-    console.log("processed to", outLocalPath);
 
-    // build public URL
     const cdnBase =
       process.env.R2_PUBLIC_BASE_URL || "https://cdn.viralvid360.com";
     const publicUrl = `${cdnBase}/${outputKey}`;
@@ -104,9 +50,4 @@ app.post("/process", async (req, res) => {
       error: err.message || "internal error",
     });
   }
-});
-
-const port = process.env.PORT || 8080;
-app.listen(port, () => {
-  console.log("FFmpeg service listening on port", port);
 });
